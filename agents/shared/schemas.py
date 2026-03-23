@@ -105,6 +105,7 @@ class SARCase(BaseModel):
     """Master state object — flows through all 6 agents"""
     case_id: str
     status: SARStatus = SARStatus.PENDING
+    raw_transaction: Optional[dict] = None          # set before pipeline starts
     normalized: Optional[NormalizedCase] = None
     risk_assessment: Optional[RiskAssessment] = None
     narrative: Optional[SARNarrative] = None
@@ -112,3 +113,5 @@ class SARCase(BaseModel):
     audit: Optional[AuditRecord] = None
     analyst_approved_by: Optional[str] = None
     final_filed_timestamp: Optional[datetime] = None
+    audit_trail: list[dict] = Field(default_factory=list)  # every agent appends here
+    error_log: list[dict] = Field(default_factory=list)    # errors append here, never crash
