@@ -119,6 +119,7 @@ async def run_pipeline(case_id: str):
 
 @app.post("/case/{case_id}/approve")
 async def approve_case(case_id: str, analyst_name: str = "Analyst-1"):
+async def approve_case(case_id: str):
     """Analyst approves the generated SAR for filing."""
     if case_id not in DB:
         raise HTTPException(status_code=404, detail="Case not found")
@@ -126,6 +127,14 @@ async def approve_case(case_id: str, analyst_name: str = "Analyst-1"):
     case = DB[case_id]
     case = await agent6_review(case, analyst_name)
     DB[case_id] = case
+    case.status = SARStatus.APPROVED
+    case.analyst_approved_by = "Analyst-1"
+    case.audit_trail.append({
+        "agent": "Analyst UI",
+        "action": "Case approved by Analyst-1",
+        "confidence": 1.0,
+        "timestamp": datetime.now().isoformat()
+    })
     return {"status": "success", "case_status": case.status}
 
 
