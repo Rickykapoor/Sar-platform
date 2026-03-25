@@ -5,7 +5,8 @@
 [![Python](https://img.shields.io/badge/Python-3.11-blue)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115.4-green)](https://fastapi.tiangolo.com)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2.45-purple)](https://github.com/langchain-ai/langgraph)
-[![LLM](https://img.shields.io/badge/LLM-MiniMax--Text--2.5%20(Free)-orange)](#llm-no-api-key-needed)
+[![LLM](https://img.shields.io/badge/LLM-Groq%20Llama%203-orange)](#llm-groq-api-key-needed)
+[![Frontend](https://img.shields.io/badge/Frontend-Next.js%2014-black)](https://nextjs.org/)
 
 ---
 
@@ -13,7 +14,7 @@
 > **Read `MASTER_CONTEXT.md` at the start of EVERY work session.** It is the single source of truth. All decisions, schemas, and API specs live there.
 
 > [!IMPORTANT]
-> **No external API key needed.** The LLM (MiniMax-Text-2.5) is provided FREE via OpenCode's built-in model — no account, no sign-in, no billing.
+> **Groq API Key Required.** The LLM (Llama 3 8B) uses the fast and free Groq API. You must set `GROQ_API_KEY` in the `.env.local` file.
 
 > [!CAUTION]
 > **Never commit `.env.local`** — it is in `.gitignore` but always double-check before pushing. **Never push directly to `main` or `develop`.** Always use PRs.
@@ -48,8 +49,8 @@ Output: Regulator-ready SAR document + immutable audit trail in Neo4j.
 |---|---|---|---|
 | 1 — Tech Lead | **Ricky** | Backend + ML | `main.py`, `agents/pipeline.py`, `agents/agent1_ingestion/`, `agents/agent2_risk/`, `prediction_engine/` |
 | 2 — Senior | **Nisarg** | AI + Graph | `agents/agent3_narrative/`, `agents/agent4_compliance/`, `agents/agent5_audit/`, `graph/neo4j/` |
-| 3 | **Anshul** | UI + Review | `agents/agent6_review/`, `ui/` |
-| 4 — Junior | **Ashwin** | Infra + Tests | `infra/`, `docker-compose.yml`, `tests/unit/`, `tests/integration/` |
+| 3 | **Anshul** | UI + Review | `agents/agent6_review/`, `ui/nextjs/` |
+| 4 — Junior | **Ashwin** | Infra + Tests | `infra/`, `docker-compose.yml`, `tests/` |
 
 **Shared files** (all 4 must agree before editing):
 - `agents/shared/schemas.py` — Pydantic contracts between all agents
@@ -65,7 +66,7 @@ Output: Regulator-ready SAR document + immutable audit trail in Neo4j.
 | Runtime | Python 3.11 | Use exactly 3.11 |
 | API | FastAPI 0.115.4 + uvicorn | Ricky owns |
 | AI Pipeline | LangGraph 0.2.45 + LangChain 0.3.7 | Nisarg + Ricky |
-| **LLM** | **MiniMax-Text-2.5 (FREE via OpenCode)** | **No API key needed** |
+| **LLM** | **Groq API (Llama 3 8B)** | **GROQ_API_KEY needed** |
 | Data Models | Pydantic v2 (2.9.2) | BaseModel everywhere |
 | Graph DB | Neo4j 5.14 Enterprise | Nisarg owns |
 | Relational DB | PostgreSQL 16 | In-memory for demo |
@@ -73,7 +74,7 @@ Output: Regulator-ready SAR document + immutable audit trail in Neo4j.
 | Vector Store | Weaviate 1.24 | Started by Docker |
 | Streaming | Kafka 3.6 | Mocked by simulator |
 | ML | XGBoost + scikit-learn + SHAP | Ricky owns |
-| Frontend | Streamlit + pyvis | Anshul owns |
+| Frontend | Next.js 14/16 (App Router) + Tailwind | Anshul owns |
 | Containers | Docker Compose | Ashwin owns |
 
 ---
@@ -144,10 +145,11 @@ WEAVIATE_URL=http://localhost:8080
 KAFKA_BOOTSTRAP_SERVERS=localhost:9092
 KAFKA_TOPIC_TRANSACTIONS=transactions
 KAFKA_TOPIC_FLAGGED=flagged_transactions
+GROQ_API_KEY=your_key_here
 ```
 
 > [!NOTE]
-> **No MINIMAX_API_KEY needed.** The LLM runs free inside OpenCode. Leave that variable out entirely.
+> **A Groq API Key is REQUIRED**. Set it in `.env.local` or the narrative generation will use local fallback templates.
 
 ### Step 5 — Start all infrastructure with Docker
 
@@ -205,15 +207,15 @@ curl http://localhost:8000/health
 
 Open the interactive API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-### Step 8 — Start the Streamlit frontend (new terminal tab)
+### Step 8 — Start the Next.js frontend (new terminal tab)
 
 ```bash
-# Make sure your venv is still activated in this new tab
-source .venv/bin/activate
-streamlit run ui/app.py
+cd ui/nextjs
+npm install
+npm run dev
 ```
 
-The UI opens automatically at [http://localhost:8501](http://localhost:8501).
+The UI opens automatically at [http://localhost:3000](http://localhost:3000).
 
 ### Step 9 — Run the test suite
 
@@ -285,26 +287,27 @@ MATCH (n) RETURN n LIMIT 50
 
 ---
 
-## 🤖 LLM — No API Key Needed
+## 🤖 LLM — Groq API
 
 > [!IMPORTANT]
-> The LLM **(MiniMax-Text-2.5)** is provided FREE by OpenCode's built-in model. You do NOT need to sign up for anything, create an account, or enter an API key. If you're inside an OpenCode session, the model is available automatically.
+> The LLM **(Llama 3 8B)** uses the Groq API. You must set `GROQ_API_KEY` in `.env.local`.
 
 **How it works in code (`agents/agent3_narrative/minimax_client.py`):**
 
 ```python
 import openai
+import os
 
 client = openai.AsyncOpenAI(
-    base_url="http://localhost:4000/v1",  # OpenCode local proxy
-    api_key="opencode-free",              # placeholder — not validated
+    base_url="https://api.groq.com/openai/v1",
+    api_key=os.getenv("GROQ_API_KEY"),
 )
 
 response = await client.chat.completions.create(
-    model="minimax/MiniMax-Text-2.5",
+    model="llama3-8b-8192",
     messages=[...],
     temperature=0.1,
-    max_tokens=800,
+    max_tokens=900,
 )
 ```
 
@@ -341,10 +344,12 @@ Sar-platform/
 │   ├── init_schema.py                    ← Constraints + GraphWriter (Nisarg)
 │   ├── graph_api.py                      ← Visualization data (Nisarg)
 │   └── cypher_queries/                   ← All .cypher files (Nisarg)
-├── ui/
-│   ├── app.py                            ← Streamlit app 5 pages (Anshul)
-│   ├── api_client.py                     ← FastAPI calls from UI (Anshul)
-│   └── mock_data.py                      ← Offline dev mock data (Anshul)
+├── ui/nextjs/
+│   ├── app/                              ← Next.js App Router Pages (Anshul)
+│   ├── components/                       ← React components (Anshul)
+│   ├── lib/api.ts                        ← FastAPI clients (Anshul)
+│   ├── package.json                      ← Node.js deps (Anshul)
+│   └── tailwind.config.ts                ← Tailwind CSS v4 config (Anshul)
 ├── infra/
 │   ├── start_all.sh                      ← Start all Docker services (Ashwin)
 │   └── check_services.sh                 ← Health check all services (Ashwin)
@@ -372,7 +377,7 @@ Sar-platform/
 |---|---|---|
 | FastAPI Backend | http://localhost:8000 | — |
 | FastAPI Docs (Swagger) | http://localhost:8000/docs | — |
-| Streamlit UI | http://localhost:8501 | — |
+| Next.js UI | http://localhost:3000 | — |
 | Neo4j Browser | http://localhost:7474 | neo4j / sarplatform123 |
 | Neo4j Bolt | bolt://localhost:7687 | — |
 | PostgreSQL | localhost:5432 | saruser / sarpass123 / sardb |
@@ -517,12 +522,12 @@ git push origin feat/nisarg-day1
 
 | # | Screen | What to show |
 |---|---|---|
-| 1 | Submit Transaction | "Structuring Demo" preset → Submit → RED result |
-| 2 | Risk Analysis | Score 0.9+, SHAP bars, typology match, risk signals |
-| 3 | Neo4j Graph | Colorful graph — Account (blue), Transaction (amber), SARCase (red) |
-| 4 | SAR Narrative | "Generate Narrative" → text streams in, compliance checklist turns green |
-| 5 | Audit Trail | Timeline of 5 agent decisions + SHA256 hash |
-| 6 | Human Approval | Analyst name → Approve → `st.balloons()` → status: FILED |
+| 1 | Landing Page | Clean, black SaaS theme → "Open Demo Center" |
+| 2 | Demo Center | Present 3 AML Scenarios → click "Run Scenario" |
+| 3 | Case Detail | 5-tab interface. Show Pipeline status → Risk Analysis with SHAP charts. |
+| 4 | SAR Report | AI streaming → Compliance Checklist → "Download PDF" (generates text-based PDF) |
+| 5 | Audit Trail | 6-agent timeline + Immutable SHA256 copy-to-clipboard |
+| 6 | Approval Flow | "Approve & File" → marks case as FILED |
 
 > Total demo time: **4 minutes**. Practice this 3 times before submission.
 

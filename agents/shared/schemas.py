@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class RiskTier(str, Enum):
@@ -132,6 +132,39 @@ class SARNarrative(BaseModel):
     part7_suspicion_details: Part7SuspicionDetails
     part8_action_taken: Part8ActionTaken
     generation_timestamp: datetime
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def narrative_body(self) -> str:
+        """Convenience accessor — maps to grounds_of_suspicion."""
+        return self.part7_suspicion_details.grounds_of_suspicion
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def summary(self) -> str:
+        """High-level summary from suspicion reasons."""
+        reasons = self.part7_suspicion_details.reasons_for_suspicion
+        return "; ".join(reasons) if reasons else "Suspicious transaction activity detected."
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def subject_info(self) -> str:
+        """Subject name from linked individuals."""
+        if self.part4_linked_individuals:
+            return self.part4_linked_individuals[0].name
+        return "Unknown"
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def suspicious_activity(self) -> str:
+        """Alias for grounds_of_suspicion."""
+        return self.part7_suspicion_details.grounds_of_suspicion
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def law_enforcement_note(self) -> str:
+        """Agency details from Part 8."""
+        return self.part8_action_taken.agency_details or "No law enforcement referral at this time."
 
 
 class ComplianceResult(BaseModel):

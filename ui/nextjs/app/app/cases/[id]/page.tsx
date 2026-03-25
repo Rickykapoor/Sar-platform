@@ -1,0 +1,568 @@
+'use client';
+import { useEffect, useState, useRef } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { sarApi, SARCase } from '@/lib/api';
+import { RiskBadge, StatusBadge } from '@/components/RiskBadge';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import {
+  ArrowLeft, Download, FileText, CheckCircle, XCircle, Loader,
+  Copy, Check, Lock, Clock, Shield, AlertTriangle, ChevronDown, ChevronUp, User, Play
+} from 'lucide-react';
+
+const TABS = ['Overview', 'Risk Analysis', 'SAR Report', 'Compliance', 'Audit Trail'];
+
+const card: React.CSSProperties = {
+  background: '#111',
+  border: '1px solid rgba(255,255,255,0.07)',
+  borderRadius: 16,
+  padding: 20,
+};
+
+export default function CaseDetail() {
+  const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+  const [data, setData] = useState<SARCase | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState('Overview');
+  const [running, setRunning] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [groqLabel, setGroqLabel] = useState('');
+  const [analyst, setAnalyst] = useState('Analyst-1');
+  const [approving, setApproving] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const reportRef = useRef<HTMLDivElement>(null);
+
+  const reload = async () => {
+    try { setData(await sarApi.getCase(id)); } catch { /* 404 */ }
+    setLoading(false);
+  };
+  useEffect(() => { reload(); }, [id]);
+
+  const runPipeline = async () => {
+    setRunning(true);
+    try { await sarApi.runPipeline(id); await reload(); } catch { /* ignore */ }
+    setRunning(false);
+  };
+
+  const generateNarrative = async () => {
+    setGenerating(true);
+    setGroqLabel('Calling Groq llama3…');
+    try { await sarApi.generateNarrative(id); setGroqLabel('✓ Done'); await reload(); }
+    catch { setGroqLabel('✗ Error'); }
+    setGenerating(false);
+  };
+
+  const approve = async () => {
+    setApproving(true);
+    try { await sarApi.approveCase(id, analyst); await reload(); } catch { /* ignore */ }
+    setApproving(false);
+  };
+
+  const dismiss = async () => {
+    setDismissing(true);
+    try { await sarApi.dismissCase(id); await reload(); } catch { /* ignore */ }
+    setDismissing(false);
+  };
+
+  const downloadPDF = async () => {
+    if (!narrative) return;
+    const { default: jsPDF } = await import('jspdf');
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    
+    let y = 15;
+    const margin = 15;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const maxWidth = pageWidth - margin * 2;
+    const lineHeight = 6;
+
+    const addText = (text: string, size = 10, isBold = false, color: [number, number, number] = [0, 0, 0]) => {
+      doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+      doc.setFontSize(size);
+      doc.setTextColor(color[0], color[1], color[2]);
+      
+      const lines = doc.splitTextToSize(text || '', maxWidth);
+      for (const line of lines) {
+        if (y + lineHeight > doc.internal.pageSize.getHeight() - margin) {
+          doc.addPage();
+          y = margin;
+        }
+        doc.text(line, margin, y);
+        y += lineHeight;
+      }
+    };
+    
+    // Title
+    addText("FIU-IND Suspicious Transaction Report (STR)", 16, true);
+    addText(`Case ID: ${id}`, 11, true, [100, 100, 100]);
+    y += 8;
+
+    // Part 1
+    addText("PART 1 - REPORT DETAILS", 11, true, [59, 130, 246]);
+    addText(`Date: ${narrative.part1_report_details?.date_of_sending || '---'}`);
+    y += 6;
+
+    // Part 2
+    addText("PART 2 - PRINCIPAL OFFICER", 11, true, [59, 130, 246]);
+    Object.entries(narrative.part2_principal_officer || {}).forEach(([k, v]) => {
+      addText(`${k.replace(/_/g, ' ').toUpperCase()}: ${v}`);
+    });
+    y += 6;
+
+    // Part 3
+    addText("PART 3 - REPORTING BRANCH", 11, true, [59, 130, 246]);
+    Object.entries(narrative.part3_reporting_branch || {}).forEach(([k, v]) => {
+      addText(`${k.replace(/_/g, ' ').toUpperCase()}: ${v}`);
+    });
+    y += 6;
+
+    // Part 4
+    addText("PART 4 - LINKED INDIVIDUALS", 11, true, [59, 130, 246]);
+    (narrative.part4_linked_individuals || []).forEach(p => {
+      addText(`Name: ${p.name}, ID: ${p.customer_id}`);
+    });
+    y += 6;
+
+    // Part 6
+    addText("PART 6 - LINKED ACCOUNTS", 11, true, [59, 130, 246]);
+    (narrative.part6_linked_accounts || []).forEach(a => {
+      addText(`Account: ${a.account_holder_name}, Number: ${a.account_number}`);
+    });
+    y += 6;
+
+    // Part 7
+    addText("PART 7 - GROUNDS OF SUSPICION", 11, true, [59, 130, 246]);
+    addText("Reasons:", 10, true);
+    (narrative.part7_suspicion_details?.reasons_for_suspicion || []).forEach(r => {
+      addText(`• ${r}`);
+    });
+    y += 4;
+    addText("Narrative:", 10, true);
+    addText(narrative.part7_suspicion_details?.grounds_of_suspicion || '');
+    y += 6;
+
+    // Part 8
+    addText("PART 8 - ACTION TAKEN", 11, true, [59, 130, 246]);
+    addText(`Under Investigation: ${narrative.part8_action_taken?.under_investigation ? 'Yes' : 'No'}`);
+
+    doc.save(`SAR_Report_${id}.pdf`);
+  };
+
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200 }}>
+      <Loader style={{ width: 18, height: 18, color: '#3b82f6', animation: 'spin 1s linear infinite' }} />
+    </div>
+  );
+
+  if (!data) return (
+    <div style={{ textAlign: 'center', padding: '80px 0' }}>
+      <p style={{ color: '#3f3f46', fontSize: 13, marginBottom: 12 }}>Case not found</p>
+      <button onClick={() => router.push('/app/cases')} style={{ color: '#3b82f6', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13 }}>← Back to cases</button>
+    </div>
+  );
+
+  const risk = data.risk_assessment;
+  const narrative = data.narrative;
+  const compliance = data.compliance;
+  const audit = data.audit;
+  const errors = data.error_log.filter(e => !e.error.includes('Neo4j write failed'));
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Back */}
+      <button onClick={() => router.push('/app/cases')}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#52525b', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, width: 'fit-content' }}>
+        <ArrowLeft style={{ width: 13, height: 13 }} /> All Cases
+      </button>
+
+      {/* Header */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 16 }}>
+        <div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <h1 className="mono" style={{ fontSize: 20, fontWeight: 700, color: '#fff' }}>{id}</h1>
+            <StatusBadge status={data.status} />
+            {risk && <RiskBadge tier={risk.risk_tier} />}
+          </div>
+          <p style={{ fontSize: 13, color: '#52525b' }}>
+            {data.normalized?.subject_name ?? 'Unknown'} · ${data.normalized?.total_amount_usd?.toLocaleString() ?? '0'} · {data.audit_trail.length} events
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {!data.normalized && (
+            <button onClick={runPipeline} disabled={running}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#2563eb', color: '#fff', padding: '8px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: 'pointer', border: 'none', opacity: running ? 0.6 : 1 }}>
+              {running ? <Loader style={{ width: 13, height: 13, animation: 'spin 1s linear infinite' }} /> : <Play style={{ width: 13, height: 13 }} />}
+              {running ? 'Running…' : 'Run Pipeline'}
+            </button>
+          )}
+          {data.normalized && !narrative && (
+            <button onClick={generateNarrative} disabled={generating}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)', color: '#a78bfa', padding: '8px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: 'pointer', opacity: generating ? 0.6 : 1 }}>
+              {generating ? <Loader style={{ width: 13, height: 13, animation: 'spin 1s linear infinite' }} /> : <FileText style={{ width: 13, height: 13 }} />}
+              {generating ? groqLabel : 'Generate Narrative'}
+            </button>
+          )}
+          {narrative && (
+            <button onClick={downloadPDF}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)', color: '#10b981', padding: '8px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: 'pointer' }}>
+              <Download style={{ width: 13, height: 13 }} /> Download PDF
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.06)', gap: 0 }}>
+        {TABS.map(t => (
+          <button key={t} onClick={() => setTab(t)} className={`tab ${tab === t ? 'active' : ''}`}>{t}</button>
+        ))}
+      </div>
+
+      {/* ══ OVERVIEW ══ */}
+      {tab === 'Overview' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+          <div style={card}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+              <Shield style={{ width: 14, height: 14, color: '#52525b' }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>Pipeline Status</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {[
+                { label: 'Agent 1 — Ingestion', done: !!data.normalized },
+                { label: 'Agent 2 — Risk Score', done: !!risk },
+                { label: 'Agent 3 — Narrative', done: !!narrative },
+                { label: 'Agent 4 — Compliance', done: !!compliance },
+                { label: 'Agent 5 — Audit Hash', done: !!audit },
+                { label: 'Agent 6 — Human Review', done: !!data.analyst_approved_by },
+              ].map(({ label, done }) => (
+                <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {done
+                    ? <CheckCircle style={{ width: 14, height: 14, color: '#10b981', flexShrink: 0 }} />
+                    : <div style={{ width: 14, height: 14, borderRadius: '50%', border: '1px solid #3f3f46', flexShrink: 0 }} />}
+                  <span style={{ fontSize: 12, color: done ? '#e4e4e7' : '#3f3f46' }}>{label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={card}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+              <FileText style={{ width: 14, height: 14, color: '#52525b' }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>Transaction Data</span>
+            </div>
+            {data.raw_transaction ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {Object.entries(data.raw_transaction).slice(0, 10).map(([k, v]) => (
+                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                    <span style={{ fontSize: 10, color: '#3f3f46', textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0, textTransform: 'capitalize' as const }}>{k.replace(/_/g,' ')}</span>
+                    <span style={{ fontSize: 12, color: '#a1a1aa', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis' }}>{String(v)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : <span style={{ fontSize: 12, color: '#3f3f46' }}>No data</span>}
+          </div>
+
+          {errors.length > 0 && (
+            <div style={{ ...card, borderColor: 'rgba(245,158,11,0.2)', gridColumn: '1/-1' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <AlertTriangle style={{ width: 14, height: 14, color: '#f59e0b' }} />
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>Pipeline Warnings</span>
+              </div>
+              {errors.map((e, i) => (
+                <div key={i} style={{ fontSize: 12, padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.05)', lastChild: { borderBottom: 'none' } as React.CSSProperties }}>
+                  <span style={{ color: '#52525b', marginRight: 8 }}>{e.agent}</span>
+                  <span style={{ color: 'rgba(251,191,36,0.8)' }}>{e.error}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══ RISK ANALYSIS ══ */}
+      {tab === 'Risk Analysis' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {!risk ? <EmptyPanel msg="Run pipeline to see risk analysis" /> : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+                <div style={{ ...card, textAlign: 'center' }}>
+                  <div style={{ fontSize: 36, fontWeight: 700, color: '#fff', marginBottom: 4 }}>
+                    {(risk.risk_score * 100).toFixed(0)}<span style={{ fontSize: 16, color: '#52525b' }}>%</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#52525b' }}>Risk Score</div>
+                </div>
+                <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                  <RiskBadge tier={risk.risk_tier} size="lg" />
+                  <div style={{ fontSize: 11, color: '#52525b' }}>Risk Tier</div>
+                </div>
+                <div style={{ ...card, textAlign: 'center' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#a78bfa', marginBottom: 4, textTransform: 'capitalize' }}>{risk.matched_typology}</div>
+                  <div style={{ fontSize: 11, color: '#52525b', marginBottom: 4 }}>Matched Typology</div>
+                  <div style={{ fontSize: 11, color: '#3f3f46' }}>{(risk.typology_confidence * 100).toFixed(0)}% conf</div>
+                </div>
+              </div>
+
+              {Object.keys(risk.shap_values).length > 0 && (
+                <div style={card}>
+                  <h3 style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginBottom: 16 }}>SHAP Feature Importance</h3>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart
+                      data={Object.entries(risk.shap_values).slice(0,8).map(([k,v]) => ({ name: k.replace(/_/g,' '), value: Math.abs(v as number), raw: v as number }))}
+                      layout="vertical" margin={{ left: 0, right: 16 }}>
+                      <XAxis type="number" tick={{ fill: '#52525b', fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <YAxis type="category" dataKey="name" width={150} tick={{ fill: '#71717a', fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <Tooltip contentStyle={{ background: '#111', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, fontSize: 12 }}
+                        formatter={(v: unknown, _: unknown, p: { payload?: { raw: number } }) => [Number(p.payload?.raw ?? v).toFixed(4), 'SHAP']} />
+                      <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+                        {Object.values(risk.shap_values).slice(0,8).map((v, i) => (
+                          <Cell key={i} fill={(v as number) > 0 ? '#3b82f6' : '#f43f5e'} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div style={{ display: 'flex', gap: 16, marginTop: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#52525b' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: '#3b82f6', display: 'inline-block' }} /> Increases risk
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#52525b' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: '#f43f5e', display: 'inline-block' }} /> Decreases risk
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {risk.signals.length > 0 && (
+                <div style={card}>
+                  <h3 style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginBottom: 12 }}>Risk Signals</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {risk.signals.map((s, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 10, background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 10, padding: 12 }}>
+                        <AlertTriangle style={{ width: 13, height: 13, color: '#f59e0b', flexShrink: 0, marginTop: 2 }} />
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#f59e0b', textTransform: 'capitalize', marginBottom: 3 }}>{s.signal_type}</div>
+                          <div style={{ fontSize: 12, color: '#71717a' }}>{s.description}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ══ SAR REPORT ══ */}
+      {tab === 'SAR Report' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {!narrative ? (
+            <div style={{ ...card, textAlign: 'center', padding: 56 }}>
+              <p style={{ fontSize: 13, color: '#52525b', marginBottom: 16 }}>Generate the FIU-IND STR narrative via Groq AI</p>
+              <button onClick={generateNarrative} disabled={generating}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)', color: '#a78bfa', padding: '10px 18px', borderRadius: 8, fontSize: 13, cursor: 'pointer', opacity: generating ? 0.6 : 1 }}>
+                {generating ? <Loader style={{ width: 14, height: 14, animation: 'spin 1s linear infinite' }} /> : <FileText style={{ width: 14, height: 14 }} />}
+                {generating ? groqLabel : 'Generate via Groq AI'}
+              </button>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12, color: '#52525b' }}>
+                  {groqLabel && <span style={{ color: '#10b981', marginRight: 12 }}>{groqLabel}</span>}
+                  Generated {new Date(narrative.generation_timestamp).toLocaleString()}
+                </span>
+                <button onClick={downloadPDF}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)', color: '#10b981', padding: '8px 14px', borderRadius: 8, fontSize: 12, cursor: 'pointer' }}>
+                  <Download style={{ width: 13, height: 13 }} /> Download PDF
+                </button>
+              </div>
+
+              <div ref={reportRef} style={{ ...card }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 14, marginBottom: 14, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                  <Shield style={{ width: 14, height: 14, color: '#3b82f6' }} />
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>FIU-IND Suspicious Transaction Report (STR)</span>
+                  <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: '#3f3f46' }}>{id}</span>
+                </div>
+
+                <Sec title="Part 1 — Report Details">
+                  <KV label="Date" value={narrative.part1_report_details?.date_of_sending ?? '—'} />
+                </Sec>
+                <Sec title="Part 2 — Principal Officer">
+                  {Object.entries(narrative.part2_principal_officer ?? {}).map(([k,v]) => <KV key={k} label={k} value={String(v)} />)}
+                </Sec>
+                <Sec title="Part 3 — Reporting Branch">
+                  {Object.entries(narrative.part3_reporting_branch ?? {}).map(([k,v]) => <KV key={k} label={k} value={String(v)} />)}
+                </Sec>
+                <Sec title="Part 4 — Linked Individuals">
+                  {(narrative.part4_linked_individuals ?? []).length === 0
+                    ? <span style={{ fontSize: 12, color: '#3f3f46' }}>None</span>
+                    : (narrative.part4_linked_individuals ?? []).map((p, i) => <KV key={i} label={p.name} value={p.customer_id} />)}
+                </Sec>
+                <Sec title="Part 6 — Linked Accounts">
+                  {(narrative.part6_linked_accounts ?? []).map((a, i) => <KV key={i} label={a.account_holder_name} value={a.account_number} mono />)}
+                </Sec>
+                <Sec title="Part 7 — Grounds of Suspicion" open>
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 10, color: '#3f3f46', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Reasons</div>
+                    {(narrative.part7_suspicion_details?.reasons_for_suspicion ?? []).map((r,i) => (
+                      <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12, color: '#a1a1aa', padding: '2px 0' }}>
+                        <span style={{ color: '#3b82f6' }}>•</span>{r}
+                      </div>
+                    ))}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: '#3f3f46', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Narrative</div>
+                    <div style={{ fontSize: 12, color: '#a1a1aa', lineHeight: 1.7, background: '#0d0d0d', padding: 14, borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)', whiteSpace: 'pre-wrap' }}>
+                      {narrative.part7_suspicion_details?.grounds_of_suspicion}
+                    </div>
+                  </div>
+                </Sec>
+                <Sec title="Part 8 — Action Taken">
+                  <KV label="Under Investigation" value={narrative.part8_action_taken?.under_investigation ? 'Yes' : 'No'} />
+                </Sec>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, paddingTop: 12, marginTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  <span style={{ color: '#3f3f46' }}>FIU-IND STR · SBA01-04</span>
+                  <span style={{ color: '#10b981' }}>✓ BSA Compliant</span>
+                </div>
+              </div>
+
+              {!['filed','dismissed'].includes(data.status) && (
+                <div style={card}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                    <User style={{ width: 14, height: 14, color: '#52525b' }} />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>Analyst Review</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input value={analyst} onChange={e => setAnalyst(e.target.value)}
+                      className="input-dark" style={{ flex: 1 }} placeholder="Analyst name" />
+                    <button onClick={approve} disabled={approving || !analyst}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.25)', color: '#10b981', padding: '8px 14px', borderRadius: 8, fontSize: 12, cursor: 'pointer', opacity: (approving || !analyst) ? 0.5 : 1 }}>
+                      {approving ? <Loader style={{ width: 13, height: 13, animation: 'spin 1s linear infinite' }} /> : <CheckCircle style={{ width: 13, height: 13 }} />}
+                      Approve & File
+                    </button>
+                    <button onClick={dismiss} disabled={dismissing}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.25)', color: '#f43f5e', padding: '8px 14px', borderRadius: 8, fontSize: 12, cursor: 'pointer' }}>
+                      {dismissing ? <Loader style={{ width: 13, height: 13, animation: 'spin 1s linear infinite' }} /> : <XCircle style={{ width: 13, height: 13 }} />}
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ══ COMPLIANCE ══ */}
+      {tab === 'Compliance' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {!compliance ? <EmptyPanel msg="Compliance runs after pipeline execution" /> : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                {[
+                  { label: 'BSA Compliant', ok: compliance.bsa_compliant },
+                  { label: 'All Fields', ok: compliance.all_fields_complete },
+                  { label: 'FinCEN Format', ok: compliance.fincen_format_valid },
+                ].map(({ label, ok }) => (
+                  <div key={label} style={{ ...card, display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {ok ? <CheckCircle style={{ width: 15, height: 15, color: '#10b981' }} /> : <XCircle style={{ width: 15, height: 15, color: '#f43f5e' }} />}
+                    <span style={{ fontSize: 12, fontWeight: 500, color: ok ? '#10b981' : '#f43f5e' }}>{label}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={card}>
+                <h3 style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginBottom: 12 }}>Compliance Issues</h3>
+                {compliance.compliance_issues.length === 0 ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#10b981', fontSize: 13 }}>
+                    <CheckCircle style={{ width: 15, height: 15 }} /> All 8 AML compliance rules passed
+                  </div>
+                ) : compliance.compliance_issues.map((issue, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: 12 }}>
+                    <XCircle style={{ width: 13, height: 13, color: '#f43f5e', flexShrink: 0, marginTop: 2 }} />
+                    <span style={{ color: '#a1a1aa' }}>{issue}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ══ AUDIT TRAIL ══ */}
+      {tab === 'Audit Trail' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {data.audit_trail.length === 0 ? <EmptyPanel msg="No audit events — run the pipeline first" /> : (
+            <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 16, overflow: 'hidden' }}>
+              {data.audit_trail.map((entry, i) => (
+                <div key={i} style={{ display: 'flex', gap: 14, padding: '14px 20px', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: '#60a5fa', flexShrink: 0 }}>{i+1}</div>
+                    {i < data.audit_trail.length - 1 && <div style={{ width: 1, flex: 1, background: 'rgba(255,255,255,0.05)', marginTop: 8 }} />}
+                  </div>
+                  <div style={{ flex: 1, paddingBottom: 4 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 3 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#fff' }}>{entry.agent}</span>
+                      <span style={{ fontSize: 10, color: '#3f3f46' }}>{(entry.confidence * 100).toFixed(0)}% conf</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#71717a', marginBottom: 4 }}>{entry.action}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: '#3f3f46' }}>
+                      <Clock style={{ width: 11, height: 11 }} />
+                      {new Date(entry.timestamp).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {audit && (
+            <div style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <Lock style={{ width: 14, height: 14, color: '#10b981' }} />
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>Immutable SHA256 Hash</span>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <code className="mono" style={{ flex: 1, fontSize: 11, color: '#10b981', background: '#0a0a0a', padding: '10px 14px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)', wordBreak: 'break-all', lineHeight: 1.6 }}>
+                  {audit.immutable_hash}
+                </code>
+                <button onClick={() => { navigator.clipboard.writeText(audit.immutable_hash); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+                  style={{ padding: 8, background: '#0a0a0a', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, cursor: 'pointer', flexShrink: 0 }}>
+                  {copied ? <Check style={{ width: 15, height: 15, color: '#10b981' }} /> : <Copy style={{ width: 15, height: 15, color: '#52525b' }} />}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmptyPanel({ msg }: { msg: string }) {
+  return (
+    <div style={{ background: '#111', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 16, padding: '64px 20px', textAlign: 'center', color: '#3f3f46', fontSize: 13 }}>
+      {msg}
+    </div>
+  );
+}
+
+function Sec({ title, children, open = false }: { title: string; children: React.ReactNode; open?: boolean }) {
+  const [o, setO] = useState(open);
+  return (
+    <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: 12, marginBottom: 12 }}>
+      <button onClick={() => setO(v => !v)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0' }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{title}</span>
+        {o ? <ChevronUp style={{ width: 12, height: 12, color: '#3f3f46' }} /> : <ChevronDown style={{ width: 12, height: 12, color: '#3f3f46' }} />}
+      </button>
+      {o && <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 5, paddingLeft: 4 }}>{children}</div>}
+    </div>
+  );
+}
+
+function KV({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+      <span style={{ fontSize: 10, color: '#3f3f46', textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0, textTransform: 'capitalize' as const }}>{label.replace(/_/g,' ')}</span>
+      <span className={mono ? 'mono' : ''} style={{ fontSize: 12, textAlign: 'right', color: mono ? '#3b82f6' : '#a1a1aa' }}>{value}</span>
+    </div>
+  );
+}

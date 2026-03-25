@@ -24,32 +24,29 @@ INNER LOOP — 6 Agent SAR Pipeline:
 
 ---
 
-## LLM — FREE MiniMax-Text-2.5 via OpenCode (NO API KEY REQUIRED)
+## LLM — Groq API (Llama 3 8B)
 
-  Model:       MiniMax-Text-2.5
-  Provider:    OpenCode built-in free model — NO external API key needed
-  Access:      Available automatically inside OpenCode sessions
+  Model:       llama3-8b-8192
+  Provider:    Groq API
+  Access:      Requires GROQ_API_KEY in root .env.local file
   Fallback:    Template-based generation in agents/agent3_narrative/fallback.py
 
   HOW TO USE IN CODE:
-    In agents/agent3_narrative/minimax_client.py use the OpenCode LLM client.
-    OpenCode exposes a local LLM endpoint — treat it like an OpenAI-compatible API:
+    In agents/agent3_narrative/minimax_client.py (acting as proxy/client), it calls Groq:
 
     import openai
     client = openai.AsyncOpenAI(
-        base_url="http://localhost:4000/v1",   # OpenCode local proxy port
-        api_key="opencode-free"               # placeholder, not validated
+        base_url="https://api.groq.com/openai/v1",
+        api_key=os.getenv("GROQ_API_KEY")
     )
     response = await client.chat.completions.create(
-        model="minimax/MiniMax-Text-2.5",
+        model="llama3-8b-8192",
         messages=[{"role": "system", "content": SYSTEM_PROMPT},
                   {"role": "user",   "content": user_prompt}],
         temperature=0.1,
-        max_tokens=800,
+        max_tokens=900,
     )
 
-  NEVER use the external Minimax REST API (https://api.minimax.chat/).
-  NEVER put a real MINIMAX_API_KEY in .env.local — it is not needed.
   NEVER let an LLM failure crash the pipeline — always call the fallback.
 
   Fallback template lives in: agents/agent3_narrative/fallback.py
@@ -68,7 +65,7 @@ INNER LOOP — 6 Agent SAR Pipeline:
           agents/agent5_audit/, graph/neo4j/
 
   Person 3 (Anshul) — Full-Stack · UI
-    OWNS: ui/, agents/agent6_review/
+    OWNS: ui/nextjs, agents/agent6_review/
 
   Person 4 (Ashwin) — Junior · Support & Tests (works under Ricky and Nisarg)
     OWNS: infra/, docker-compose.yml, tests/unit/, tests/integration/
@@ -86,7 +83,7 @@ INNER LOOP — 6 Agent SAR Pipeline:
   Runtime:        Python 3.11
   API framework:  FastAPI 0.115.4 + uvicorn
   AI framework:   LangGraph 0.2.45 + LangChain 0.3.7
-  LLM:            MiniMax-Text-2.5 (FREE via OpenCode — no API key)
+  LLM:            Groq API (Llama 3 8B)
   Data models:    Pydantic v2 (2.9.2) — BaseModel everywhere
   Graph DB:       Neo4j 5.14 Enterprise — bolt://localhost:7687
   Relational DB:  PostgreSQL 16 — localhost:5432 (not heavily used in demo)
@@ -94,7 +91,7 @@ INNER LOOP — 6 Agent SAR Pipeline:
   Vector store:   Weaviate 1.24 — localhost:8080
   Streaming:      Apache Kafka 3.6 — localhost:9092 (mocked by simulator)
   ML models:      XGBoost + scikit-learn + SHAP
-  Frontend:       Streamlit + pyvis for graph rendering
+  Frontend:       Next.js 14/16 (App Router) + Tailwind CSS v4
   Containers:     Docker Compose (no Kubernetes for hackathon)
 
 ---

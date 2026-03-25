@@ -1,11 +1,14 @@
 """
 Agent 3 — Narrative Generation
-MiniMax-Text-2.5 client via OpenCode's local free proxy.
-NO external API key required — uses http://localhost:4000/v1.
+LLM client with 3-tier fallback chain:
+  1. Groq API (free — llama3-8b-8192) — if GROQ_API_KEY is set
+  2. OpenCode local proxy (MiniMax-Text-2.5) — fallback
+  3. Template-based fallback — always works, no LLM needed
 """
 
 from __future__ import annotations
 
+import os
 import openai
 from agents.agent3_narrative.prompts import SYSTEM_PROMPT, build_user_prompt
 from agents.agent3_narrative.fallback import generate_fallback_narrative
@@ -14,42 +17,70 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from agents.shared.schemas import SARCase
 
-# ---------------------------------------------------------------------------
-# Singleton async client — OpenCode free LLM proxy
-# ---------------------------------------------------------------------------
-_client = openai.AsyncOpenAI(
-    base_url="http://localhost:4000/v1",
-    api_key="opencode-free",   # placeholder — not validated by OpenCode proxy
-)
+_GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+_GROQ_MODEL = "llama3-8b-8192"
 
-_MODEL = "minimax/MiniMax-Text-2.5"
+_OPENCODE_BASE_URL = "http://localhost:4000/v1"
+_OPENCODE_MODEL = "minimax/MiniMax-Text-2.5"
+
+
+async def _call_groq(state: "SARCase") -> str:
+    """Call Groq API (free tier — llama3-8b-8192)."""
+    client = openai.AsyncOpenAI(base_url=_GROQ_BASE_URL, api_key=_GROQ_API_KEY)
+    response = await client.chat.completions.create(
+        model=_GROQ_MODEL,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": build_user_prompt(state)},
+        ],
+        temperature=0.1,
+        max_tokens=900,
+        timeout=20,
+    )
+    return (response.choices[0].message.content or "").strip()
+
+
+async def _call_opencode(state: "SARCase") -> str:
+    """Call OpenCode local LLM proxy (MiniMax-Text-2.5)."""
+    client = openai.AsyncOpenAI(base_url=_OPENCODE_BASE_URL, api_key="opencode-free")
+    response = await client.chat.completions.create(
+        model=_OPENCODE_MODEL,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": build_user_prompt(state)},
+        ],
+        temperature=0.1,
+        max_tokens=800,
+        timeout=15,
+    )
+    return (response.choices[0].message.content or "").strip()
 
 
 async def generate_narrative(state: "SARCase") -> str:
     """
-    Call MiniMax-Text-2.5 via OpenCode local proxy to generate a SAR narrative.
-
-    Returns:
-        A narrative string (always ≥100 characters).
-        Falls back to template-based generation on any LLM failure.
+    Generate a SAR narrative with 3-tier fallback:
+      1. Groq (free cloud LLM) if GROQ_API_KEY is set
+      2. OpenCode local proxy
+      3. Template fallback — always succeeds
+    Returns a string with section markers suitable for FIU-IND STR.
     """
-    try:
-        user_prompt = build_user_prompt(state)
-        response = await _client.chat.completions.create(
-            model=_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.1,
-            max_tokens=800,
-        )
-        content = response.choices[0].message.content or ""
-        # Sanity check — must meet minimum length requirement
-        if len(content.strip()) < 100:
-            return generate_fallback_narrative(state)
-        return content.strip()
+    # Tier 1: Groq (free — add GROQ_API_KEY to .env.local)
+    if _GROQ_API_KEY:
+        try:
+            result = await _call_groq(state)
+            if len(result) >= 100:
+                return result
+        except Exception as e:
+            print(f"[Agent3] Groq failed: {e} — trying OpenCode proxy")
 
-    except Exception:
-        # NEVER crash the pipeline — always fall back
-        return generate_fallback_narrative(state)
+    # Tier 2: OpenCode local proxy
+    try:
+        result = await _call_opencode(state)
+        if len(result) >= 100:
+            return result
+    except Exception as e:
+        print(f"[Agent3] OpenCode proxy failed: {e} — using template fallback")
+
+    # Tier 3: Template fallback — guaranteed to work
+    return generate_fallback_narrative(state)
