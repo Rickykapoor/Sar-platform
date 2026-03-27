@@ -224,4 +224,10 @@ export const sarApi = {
   },
   refreshPipeline: (limit?: number) => api<{ status: string; message: string; total_cases: number }>(`/api/pipeline/refresh${limit ? `?limit=${limit}` : ''}`, { method: 'POST' }),
   trainModel: () => api<{ status: string; message: string }>('/api/model/train', { method: 'POST' }),
+  getGraphContext: (caseId: string) => api<any>(`/api/graph/${caseId}`),
+  getTypology: (caseId: string) => api<any>(`/api/typology/${caseId}`),
+  getTypologyRegistry: () => api<any>('/api/typology-registry'),
+  getAuditTrail: (limit?: number) => api<any>(`/api/audit${limit ? `?limit=${limit}` : ''}`),
+  logAuditEvent: (body: { user_id: string; user_role: string; event_type: string; metadata: Record<string, unknown> }) =>
+    api<any>('/api/audit/log', { method: 'POST', body: JSON.stringify(body) }),
 };

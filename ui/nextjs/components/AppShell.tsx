@@ -2,12 +2,15 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, FileText, Play, Shield, ExternalLink } from 'lucide-react';
+import { LayoutDashboard, FileText, Play, Shield, ExternalLink, Network, Tag, ClipboardList } from 'lucide-react';
 
 const NAV = [
   { href: '/app', icon: LayoutDashboard, label: 'Dashboard', exact: true },
   { href: '/app/cases', icon: FileText, label: 'All Cases' },
   { href: '/app/demo', icon: Play, label: 'Demo Center' },
+  { href: '/app/graph', icon: Network, label: 'Graph Explorer' },
+  { href: '/app/typology', icon: Tag, label: 'Typology Reports' },
+  { href: '/app/audit', icon: ClipboardList, label: 'Audit Trail' },
 ];
 
 function BackendPill() {
@@ -54,9 +57,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* Nav */}
-        <nav style={{ flex: 1, padding: '14px 10px' }}>
-          <div style={{ fontSize: 10, color: '#3f3f46', padding: '0 8px', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>Menu</div>
-          {NAV.map(({ href, icon: Icon, label, exact }) => {
+        <nav style={{ flex: 1, padding: '14px 10px', overflowY: 'auto' }}>
+          <div style={{ fontSize: 10, color: '#3f3f46', padding: '0 8px', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>Core</div>
+          {NAV.slice(0, 3).map(({ href, icon: Icon, label, exact }) => {
+            const active = isActive(href, exact);
+            return (
+              <Link key={href} href={href} className={`nav-link ${active ? 'active' : ''}`} style={{ marginBottom: 2 }}>
+                <Icon style={{ width: 15, height: 15, flexShrink: 0 }} />
+                {label}
+              </Link>
+            );
+          })}
+          <div style={{ fontSize: 10, color: '#3f3f46', padding: '0 8px', marginBottom: 8, marginTop: 16, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>Intelligence</div>
+          {NAV.slice(3).map(({ href, icon: Icon, label, exact }) => {
             const active = isActive(href, exact);
             return (
               <Link key={href} href={href} className={`nav-link ${active ? 'active' : ''}`} style={{ marginBottom: 2 }}>
@@ -76,7 +89,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             Back to Home
           </Link>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {[['XGBoost + SHAP', '#3b82f6'], ['Groq llama3', '#8b5cf6'], ['8 AML Rules', '#10b981']].map(([label, color]) => (
+            {[['XGBoost + SHAP', '#3b82f6'], ['Neo4j Graph', '#f59e0b'], ['4 AML Typologies', '#10b981'], ['PII Stripping', '#a78bfa']].map(([label, color]) => (
               <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={{ width: 5, height: 5, borderRadius: '50%', background: color, flexShrink: 0 }} />
                 <span style={{ fontSize: 11, color: '#3f3f46' }}>{label}</span>

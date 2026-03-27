@@ -26,9 +26,17 @@ from prediction_engine.simulator import (
 )
 from graph.neo4j.graph_api import get_case_graph
 from agents.shared.schemas import SARReportData
-from reports.typology_definitions import classify_typology
+from reports.typology_definitions import classify_typology as old_classify_typology
 from reports.pdf_generator import generate_sar_pdf
 from fastapi.responses import Response
+
+# New module imports
+from graph.neo4j.graph_traversal import analyze_transaction_graph
+from graph.neo4j.fan_in_detector import detect_fan_in
+from agents.typology_registry import classify_typology as new_classify_typology, get_all_typology_info
+from agents.pii_stripper import get_audit_log, log_ui_event
+from prediction_engine.baseline_calculator import compute_behavioral_features
+from prediction_engine.aggregation_engine import compute_rolling_features, generate_aggregation_alerts
 
 app = FastAPI(title="SAR Platform API", version="1.0.0")
 
@@ -550,6 +558,138 @@ async def refresh_pipeline(limit: int = 300):
         "message": f"Successfully cleared DB and re-processed {processed_count} cases.",
         "total_cases": len(DB)
     }
+
+
+# ---------------------------------------------------------------------------
+# Module 1 — Graph Context & Fan-In Analysis
+# ---------------------------------------------------------------------------
+
+@app.get("/api/graph/{case_id}")
+async def get_graph_context(case_id: str):
+    """Returns multi-hop graph analysis and fan-in signal for a case."""
+    case = DB.get(case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    tx = case.raw_transaction or {}
+    account_id = str(tx.get("Customer_Account_No", tx.get("account_id", case_id)))
+
+    hop_result  = analyze_transaction_graph(tx, account_id)
+    fan_signal  = detect_fan_in(tx, account_id)
+
+    return {
+        "case_id":          case_id,
+        "account_id":       account_id,
+        "graph_analysis": {
+            "pass_through_score":          hop_result.pass_through_score,
+            "upstream_cash_deposit_count": hop_result.upstream_cash_deposit_count,
+            "upstream_unique_states":      hop_result.upstream_unique_states,
+            "smurfing_indicator":          hop_result.smurfing_indicator,
+            "graph_signature":             hop_result.graph_signature,
+            "hops_analyzed":               hop_result.hops_analyzed,
+            "flagged_jurisdictions":       hop_result.flagged_jurisdictions,
+            "suspicious_entities":         hop_result.suspicious_entities,
+        },
+        "fan_in_analysis": {
+            "fan_in_count":           fan_signal.fan_in_count,
+            "cross_city_flag":        fan_signal.cross_city_flag,
+            "cross_state_flag":       fan_signal.cross_state_flag,
+            "sequential_timing_flag": fan_signal.sequential_timing_flag,
+            "low_kyc_ratio":          fan_signal.low_kyc_ratio,
+            "typology_match":         fan_signal.typology_match,
+            "risk_weight":            fan_signal.risk_weight,
+            "description":            fan_signal.description,
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# Module 3 — Typology Classification
+# ---------------------------------------------------------------------------
+
+@app.get("/api/typology/{case_id}")
+async def get_typology(case_id: str):
+    """Returns matched AML typology and FIU-IND code for a case."""
+    case = DB.get(case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    tx  = case.raw_transaction or {}
+    account_id = str(tx.get("Customer_Account_No", tx.get("account_id", case_id)))
+
+    hop_result = analyze_transaction_graph(tx, account_id)
+    match      = new_classify_typology(tx, hop_result.graph_signature)
+
+    # Behavioral + aggregation features
+    behavioral = compute_behavioral_features(tx, account_id)
+    aggregation = compute_rolling_features(tx, account_id)
+    agg_alerts  = generate_aggregation_alerts(aggregation)
+
+    return {
+        "case_id": case_id,
+        "typology_match": {
+            "typology_code":       match.typology_code         if match else None,
+            "fiu_ind_code":        match.fiu_ind_typology_code if match else None,
+            "description":         match.description           if match else "No typology matched",
+            "risk_weight":         match.risk_weight           if match else 0.0,
+            "confidence":          match.confidence            if match else 0.0,
+            "match_reason":        match.match_reason          if match else "—",
+            "regulatory_ref":      match.regulatory_reference  if match else "—",
+        },
+        "behavioral_features": {
+            "amount_vs_history_ratio": behavioral.amount_vs_history_ratio,
+            "z_score_amount":          behavioral.z_score_amount,
+            "velocity_7d_count":       behavioral.velocity_7d_count,
+            "income_mismatch_ratio":   behavioral.income_mismatch_ratio,
+            "income_tier":             aggregation.income_tier,
+        },
+        "rolling_windows": {
+            "30d_total":   aggregation.rolling_30d_total,
+            "90d_total":   aggregation.rolling_90d_total,
+            "180d_total":  aggregation.rolling_180d_total,
+            "30d_breach":  aggregation.rolling_30d_threshold_breach,
+            "90d_breach":  aggregation.rolling_90d_threshold_breach,
+            "trend_slope": aggregation.monthly_inflow_trend_slope,
+        },
+        "aggregation_alerts": [
+            {
+                "window":               a.window,
+                "total_inflow_inr":     a.total_inflow_inr,
+                "income_mismatch_ratio":a.income_mismatch_ratio,
+                "narrative":            a.narrative,
+            } for a in agg_alerts
+        ],
+    }
+
+
+@app.get("/api/typology-registry")
+async def get_typology_registry():
+    """Returns all known AML typology definitions."""
+    return {"typologies": get_all_typology_info()}
+
+
+# ---------------------------------------------------------------------------
+# Module 6 — Audit Trail
+# ---------------------------------------------------------------------------
+
+@app.get("/api/audit")
+async def get_audit_trail(limit: int = 100):
+    """Returns the UI + PII-stripping audit log."""
+    log_ui_event("system", "SYSTEM", "AUDIT_QUERIED", {"limit": limit})
+    entries = get_audit_log(limit)
+    return {"entries": entries, "total": len(entries)}
+
+
+@app.post("/api/audit/log")
+async def post_audit_event(body: dict):
+    """Records a UI audit event (case open, page view, etc.)."""
+    entry = log_ui_event(
+        body.get("user_id", "anonymous"),
+        body.get("user_role", "ANALYST_L1"),
+        body.get("event_type", "UNKNOWN"),
+        body.get("metadata", {}),
+    )
+    return {"status": "logged", "entry_hash": entry["entry_hash"]}
 
 
 if __name__ == "__main__":
